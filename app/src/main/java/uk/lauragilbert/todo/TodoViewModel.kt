@@ -12,13 +12,24 @@ import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.time.LocalDate
 
 data class Todo(val id: Long, val text: String, val color: Int)
+
+data class Stats(val total: Int = 0, val day: String = "", val today: Int = 0) {
+    fun forToday(date: String) = if (day == date) this else copy(day = date, today = 0)
+}
 
 class TodoViewModel(app: Application) : AndroidViewModel(app) {
     private val file = File(app.filesDir, "todos.json")
     private val _items = MutableStateFlow(load())
     val items: StateFlow<List<Todo>> = _items.asStateFlow()
+
+    private val statsFile = File(app.filesDir, "stats.json")
+    private val _stats = MutableStateFlow(loadStats().forToday(today()))
+    val stats: StateFlow<Stats> = _stats.asStateFlow()
+
+    fun refreshDay() = _stats.update { it.forToday(today()) }
 
     fun add(text: String) {
         val clean = text.trim().replaceFirstChar { it.uppercase() }
@@ -32,10 +43,12 @@ class TodoViewModel(app: Application) : AndroidViewModel(app) {
     fun remove(todo: Todo): Int {
         val index = _items.value.indexOf(todo)
         mutate { it - todo }
+        changeStats(+1)
         return index
     }
 
     fun restore(todo: Todo, index: Int) {
+        if (_items.value.none { it.id == todo.id }) changeStats(-1)
         mutate { list ->
             if (list.any { it.id == todo.id }) list
             else list.toMutableList().apply { add(index.coerceIn(0, size), todo) }
@@ -54,6 +67,30 @@ class TodoViewModel(app: Application) : AndroidViewModel(app) {
         _items.update(change)
         val snapshot = _items.value
         viewModelScope.launch(Dispatchers.IO) { save(snapshot) }
+    }
+
+    private fun today() = LocalDate.now().toString()
+
+    private fun changeStats(delta: Int) {
+        _stats.update { st ->
+            st.forToday(today()).let {
+                it.copy(total = maxOf(0, it.total + delta), today = maxOf(0, it.today + delta))
+            }
+        }
+        val snapshot = _stats.value
+        viewModelScope.launch(Dispatchers.IO) { saveStats(snapshot) }
+    }
+
+    private fun loadStats(): Stats = runCatching {
+        val o = JSONObject(statsFile.readText())
+        Stats(o.optInt("total"), o.optString("day"), o.optInt("today"))
+    }.getOrDefault(Stats())
+
+    @Synchronized
+    private fun saveStats(st: Stats) {
+        val tmp = File(statsFile.parentFile, "stats.json.tmp")
+        tmp.writeText(JSONObject().put("total", st.total).put("day", st.day).put("today", st.today).toString())
+        tmp.renameTo(statsFile)
     }
 
     private fun load(): List<Todo> = runCatching {

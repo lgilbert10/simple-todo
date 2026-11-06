@@ -17,8 +17,11 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -79,6 +82,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.launch
@@ -113,6 +117,11 @@ fun TodoTheme(content: @Composable () -> Unit) {
 @Composable
 fun TodoScreen(vm: TodoViewModel = viewModel()) {
     val items by vm.items.collectAsStateWithLifecycle()
+    val stats by vm.stats.collectAsStateWithLifecycle()
+    LifecycleResumeEffect(Unit) {
+        vm.refreshDay()
+        onPauseOrDispose { }
+    }
     var input by rememberSaveable { mutableStateOf("") }
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -156,18 +165,26 @@ fun TodoScreen(vm: TodoViewModel = viewModel()) {
         },
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
-            Column(Modifier.padding(start = 24.dp, end = 24.dp, top = 28.dp, bottom = 12.dp)) {
-                Text(
-                    "To do",
-                    fontSize = 36.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
-                Text(
-                    if (items.isEmpty()) "Nothing left" else "${items.size} ${if (items.size == 1) "item" else "items"}",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+            Row(
+                Modifier.padding(start = 24.dp, end = 20.dp, top = 28.dp, bottom = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        "To do",
+                        fontSize = 36.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                        if (items.isEmpty()) "Nothing left" else "${items.size} ${if (items.size == 1) "item" else "items"}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Counter(stats.today, "Today", Palette[5])
+                Spacer(Modifier.width(12.dp))
+                Counter(stats.total, "All time", Palette[9])
             }
             if (items.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -193,7 +210,7 @@ fun TodoScreen(vm: TodoViewModel = viewModel()) {
                                 scope.launch {
                                     snackbar.currentSnackbarData?.dismiss()
                                     val r = snackbar.showSnackbar(
-                                        "Deleted", actionLabel = "Undo", duration = SnackbarDuration.Short,
+                                        "Done", actionLabel = "Undo", duration = SnackbarDuration.Short,
                                     )
                                     if (r == SnackbarResult.ActionPerformed) vm.restore(todo, index)
                                 }
@@ -203,6 +220,39 @@ fun TodoScreen(vm: TodoViewModel = viewModel()) {
                 }
             }
         }
+    }
+}
+
+@Composable
+fun Counter(value: Int, label: String, accent: Color) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Box(
+            Modifier
+                .size(54.dp)
+                .clip(CircleShape)
+                .background(SlateLight)
+                .border(2.dp, accent, CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            AnimatedContent(
+                targetState = value,
+                transitionSpec = {
+                    val up = targetState > initialState
+                    (slideInVertically { if (up) it else -it } + fadeIn()) togetherWith
+                        (slideOutVertically { if (up) -it else it } + fadeOut())
+                },
+                label = label,
+            ) { n ->
+                Text(
+                    if (n > 9999) "${n / 1000}k" else n.toString(),
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color.White,
+                )
+            }
+        }
+        Spacer(Modifier.size(4.dp))
+        Text(label, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
