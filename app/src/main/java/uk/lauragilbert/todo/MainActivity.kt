@@ -4,10 +4,14 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import kotlin.math.abs
 import android.app.Activity
 import android.content.ActivityNotFoundException
@@ -165,6 +169,18 @@ fun TodoScreen(vm: TodoViewModel = viewModel()) {
         vm.move(from.key as Long, to.key as Long)
         haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
     }
+    val tabBounds = remember { mutableStateMapOf<Boolean, Rect>() }
+    var dragColor by remember { mutableStateOf<Color?>(null) }
+    var dropTarget by remember { mutableStateOf<Boolean?>(null) }
+    val dropSlop = with(LocalDensity.current) { 24.dp.toPx() }
+    LaunchedEffect(dropTarget) { if (dropTarget != null) haptic.performHapticFeedback(HapticFeedbackType.LongPress) }
+
+    fun targetAt(pos: Offset): Boolean? {
+        val bottom = tabBounds.values.maxOfOrNull { it.bottom } ?: return null
+        if (pos.y > bottom + dropSlop) return null
+        val nearest = tabBounds.minByOrNull { abs(it.value.center.x - pos.x) }?.key
+        return nearest?.takeIf { it != later }
+    }
     val context = LocalContext.current
     val focusManager = LocalFocusManager.current
 
@@ -236,7 +252,14 @@ fun TodoScreen(vm: TodoViewModel = viewModel()) {
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 listOf(false to "Today", true to "Later").forEach { (isLater, label) ->
-                    TabPill(label, items.count { it.later == isLater }, later == isLater) {
+                    TabPill(
+                        label = label,
+                        count = items.count { it.later == isLater },
+                        selected = later == isLater,
+                        dropColor = dragColor?.takeIf { isLater != later },
+                        hovered = dropTarget == isLater,
+                        modifier = Modifier.onGloballyPositioned { tabBounds[isLater] = it.boundsInWindow() },
+                    ) {
                         if (later != isLater) {
                             later = isLater
                             scope.launch { listState.scrollToItem(0) }
@@ -265,15 +288,21 @@ fun TodoScreen(vm: TodoViewModel = viewModel()) {
                             todo = todo,
                             dragScope = this,
                             dragging = dragging,
-                            destination = if (later) "Today" else "Later",
-                            onSwitchTab = {
-                                vm.switchTab(todo)
-                                scope.launch {
-                                    snackbar.currentSnackbarData?.dismiss()
-                                    snackbar.showSnackbar(
-                                        if (later) "Moved to Today" else "Moved to Later",
-                                        duration = SnackbarDuration.Short,
-                                    )
+                            onDragStart = { dragColor = Palette[todo.color] },
+                            onDragAt = { dropTarget = targetAt(it) },
+                            onDragEnd = {
+                                val target = dropTarget
+                                dragColor = null
+                                dropTarget = null
+                                if (target != null) {
+                                    vm.switchTab(todo)
+                                    scope.launch {
+                                        snackbar.currentSnackbarData?.dismiss()
+                                        snackbar.showSnackbar(
+                                            if (target) "Moved to Later" else "Moved to Today",
+                                            duration = SnackbarDuration.Short,
+                                        )
+                                    }
                                 }
                             },
                             onEdit = { vm.edit(todo, it) },
@@ -330,12 +359,31 @@ fun Counter(value: Int, label: String, accent: Color) {
 }
 
 @Composable
-fun TabPill(label: String, count: Int, selected: Boolean, onClick: () -> Unit) {
-    val bg by animateColorAsState(if (selected) SlateLight else Color.Transparent, label = "tab")
+fun TabPill(
+    label: String,
+    count: Int,
+    selected: Boolean,
+    dropColor: Color?,
+    hovered: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    val lit = hovered && dropColor != null
+    val bg by animateColorAsState(
+        when {
+            lit -> dropColor!!
+            selected -> SlateLight
+            else -> Color.Transparent
+        },
+        label = "tab",
+    )
+    val grow by animateFloatAsState(if (lit) 1.12f else 1f, label = "tabGrow")
     Row(
-        Modifier
+        modifier
+            .scale(grow)
             .clip(CircleShape)
             .background(bg)
+            .then(if (dropColor != null) Modifier.border(2.dp, dropColor, CircleShape) else Modifier)
             .clickable(onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -344,14 +392,18 @@ fun TabPill(label: String, count: Int, selected: Boolean, onClick: () -> Unit) {
             label,
             fontSize = 15.sp,
             fontWeight = FontWeight.SemiBold,
-            color = if (selected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+            color = when {
+                lit -> SlateInk
+                selected || dropColor != null -> Color.White
+                else -> MaterialTheme.colorScheme.onSurfaceVariant
+            },
         )
         if (count > 0) {
             Spacer(Modifier.width(6.dp))
             Text(
                 count.toString(),
                 fontSize = 13.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = if (lit) SlateInk.copy(alpha = 0.7f) else MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
     }
@@ -363,8 +415,9 @@ fun TodoRow(
     todo: Todo,
     dragScope: ReorderableCollectionItemScope,
     dragging: Boolean,
-    destination: String,
-    onSwitchTab: () -> Unit,
+    onDragStart: () -> Unit,
+    onDragAt: (Offset) -> Unit,
+    onDragEnd: () -> Unit,
     modifier: Modifier = Modifier,
     onEdit: (String) -> Unit,
     onDelete: () -> Unit,
@@ -374,11 +427,8 @@ fun TodoRow(
     val grow by animateFloatAsState(if (dragging) 1.03f else 1f, label = "grow")
     var editing by remember { mutableStateOf(false) }
     val isDragging by rememberUpdatedState(dragging)
-    var dx by remember { mutableFloatStateOf(0f) }
-    val switchAt = with(LocalDensity.current) { 96.dp.toPx() }
-    val armed = abs(dx) > switchAt
-    LaunchedEffect(armed) { if (armed) haptic.performHapticFeedback(HapticFeedbackType.LongPress) }
-    val slide by animateFloatAsState(if (dragging) dx.coerceIn(-switchAt * 1.4f, switchAt * 1.4f) else 0f, label = "slide")
+    val dragAt by rememberUpdatedState(onDragAt)
+    var coords by remember { mutableStateOf<LayoutCoordinates?>(null) }
     var draft by remember { mutableStateOf(TextFieldValue(todo.text)) }
     val focus = remember { FocusRequester() }
     val focusManager = LocalFocusManager.current
@@ -418,17 +468,19 @@ fun TodoRow(
     val shape = RoundedCornerShape(18.dp)
     SwipeToDismissBox(
         state = state,
-        modifier = modifier.pointerInput(Unit) {
-            awaitEachGesture {
-                awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
-                dx = 0f
-                do {
-                    val event = awaitPointerEvent(PointerEventPass.Initial)
-                    val change = event.changes.first()
-                    if (isDragging) dx += change.position.x - change.previousPosition.x
-                } while (event.changes.any { it.pressed })
-            }
-        },
+        modifier = modifier
+            .onGloballyPositioned { coords = it }
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                    do {
+                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                        val change = event.changes.first()
+                        val c = coords
+                        if (isDragging && c != null && c.isAttached) dragAt(c.localToWindow(change.position))
+                    } while (event.changes.any { it.pressed })
+                }
+            },
         gesturesEnabled = !editing && !dragging,
         backgroundContent = {
             val active = state.targetValue != SwipeToDismissBoxValue.Settled
@@ -467,18 +519,14 @@ fun TodoRow(
             modifier = with(dragScope) {
                 Modifier
                     .fillMaxWidth()
-                    .graphicsLayer {
-                        translationX = slide
-                        alpha = if (armed && dragging) 0.8f else 1f
-                    }
                     .scale(grow)
                     .longPressDraggableHandle(
                         enabled = !editing,
-                        onDragStarted = { haptic.performHapticFeedback(HapticFeedbackType.LongPress) },
-                        onDragStopped = {
-                            if (abs(dx) > switchAt) onSwitchTab()
-                            dx = 0f
+                        onDragStarted = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onDragStart()
                         },
+                        onDragStopped = { onDragEnd() },
                     )
             },
         ) {
@@ -505,13 +553,7 @@ fun TodoRow(
                         },
                 )
             } else {
-                val hint = textStyle.copy(fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                val showHint = armed && dragging
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (showHint && dx > 0) Text("$destination →", style = hint, modifier = Modifier.padding(start = 20.dp))
-                    Text(todo.text, style = textStyle, modifier = textModifier.weight(1f))
-                    if (showHint && dx < 0) Text("← $destination", style = hint, modifier = Modifier.padding(end = 20.dp))
-                }
+                Text(todo.text, style = textStyle, modifier = textModifier)
             }
         }
     }
