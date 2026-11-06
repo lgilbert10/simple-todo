@@ -13,7 +13,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 
-data class Todo(val id: Long, val text: String)
+data class Todo(val id: Long, val text: String, val color: Int)
 
 class TodoViewModel(app: Application) : AndroidViewModel(app) {
     private val file = File(app.filesDir, "todos.json")
@@ -23,8 +23,10 @@ class TodoViewModel(app: Application) : AndroidViewModel(app) {
     fun add(text: String) {
         val clean = text.trim().replaceFirstChar { it.uppercase() }
         if (clean.isEmpty()) return
-        val id = (_items.value.maxOfOrNull { it.id } ?: 0L) + 1
-        mutate { it + Todo(id, clean) }
+        mutate { list ->
+            val id = (list.maxOfOrNull { it.id } ?: 0L) + 1
+            list + Todo(id, clean, pickColor(list))
+        }
     }
 
     fun remove(todo: Todo): Int {
@@ -40,6 +42,14 @@ class TodoViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    private fun pickColor(list: List<Todo>): Int {
+        val used = list.map { it.color }.toSet()
+        val unused = Palette.indices.filter { it !in used }
+        val recent = list.takeLast(Palette.size / 2).map { it.color }.toSet()
+        val choices = unused.ifEmpty { Palette.indices.filter { it !in recent } }
+        return choices.random()
+    }
+
     private fun mutate(change: (List<Todo>) -> List<Todo>) {
         _items.update(change)
         val snapshot = _items.value
@@ -48,16 +58,17 @@ class TodoViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun load(): List<Todo> = runCatching {
         val arr = JSONArray(file.readText())
-        List(arr.length()) { i ->
+        (0 until arr.length()).fold(emptyList<Todo>()) { list, i ->
             val o = arr.getJSONObject(i)
-            Todo(o.getLong("id"), o.getString("text"))
+            val color = o.optInt("color", -1).takeIf { it in Palette.indices } ?: pickColor(list)
+            list + Todo(o.getLong("id"), o.getString("text"), color)
         }
     }.getOrDefault(emptyList())
 
     @Synchronized
     private fun save(list: List<Todo>) {
         val arr = JSONArray()
-        list.forEach { arr.put(JSONObject().put("id", it.id).put("text", it.text)) }
+        list.forEach { arr.put(JSONObject().put("id", it.id).put("text", it.text).put("color", it.color)) }
         val tmp = File(file.parentFile, "todos.json.tmp")
         tmp.writeText(arr.toString())
         tmp.renameTo(file)

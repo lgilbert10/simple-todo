@@ -3,10 +3,10 @@ package uk.lauragilbert.todo
 import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.Intent
-import android.os.Build
 import android.os.Bundle
 import android.speech.RecognizerIntent
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -19,7 +19,6 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -44,7 +43,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Mic
-import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButtonDefaults
@@ -61,9 +59,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.dynamicDarkColorScheme
-import androidx.compose.material3.dynamicLightColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -76,6 +71,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -90,21 +86,27 @@ import kotlinx.coroutines.launch
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+        )
         setContent { TodoTheme { TodoScreen() } }
     }
 }
 
 @Composable
 fun TodoTheme(content: @Composable () -> Unit) {
-    val dark = isSystemInDarkTheme()
-    val context = LocalContext.current
-    val scheme: ColorScheme = when {
-        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ->
-            if (dark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-        dark -> darkColorScheme()
-        else -> lightColorScheme()
-    }
+    val scheme = darkColorScheme(
+        primary = Palette[7],
+        onPrimary = SlateInk,
+        surface = Slate,
+        onSurface = Color.White,
+        onSurfaceVariant = Color(0xFFB4BCC8),
+        surfaceContainerHighest = SlateLight,
+        inverseSurface = Color(0xFFF1F3F6),
+        inverseOnSurface = SlateInk,
+        inversePrimary = Palette[9],
+    )
     MaterialTheme(colorScheme = scheme, content = content)
 }
 
@@ -228,7 +230,7 @@ fun TodoRow(todo: Todo, modifier: Modifier = Modifier, onDelete: () -> Unit) {
                     .clip(shape)
                     .background(
                         if (state.dismissDirection == SwipeToDismissBoxValue.Settled) Color.Transparent
-                        else MaterialTheme.colorScheme.errorContainer
+                        else SlateLight
                     )
                     .padding(horizontal = 24.dp),
                 contentAlignment = alignment,
@@ -236,7 +238,7 @@ fun TodoRow(todo: Todo, modifier: Modifier = Modifier, onDelete: () -> Unit) {
                 Icon(
                     Icons.Rounded.Delete,
                     contentDescription = "Delete",
-                    tint = MaterialTheme.colorScheme.onErrorContainer,
+                    tint = Palette[todo.color],
                     modifier = Modifier.scale(iconScale),
                 )
             }
@@ -244,13 +246,14 @@ fun TodoRow(todo: Todo, modifier: Modifier = Modifier, onDelete: () -> Unit) {
     ) {
         Surface(
             shape = shape,
-            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            color = Palette[todo.color],
             modifier = Modifier.fillMaxWidth(),
         ) {
             Text(
                 todo.text,
                 fontSize = 17.sp,
-                color = MaterialTheme.colorScheme.onSurface,
+                fontWeight = FontWeight.Medium,
+                color = SlateInk,
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 18.dp),
             )
         }
@@ -293,9 +296,13 @@ fun InputBar(value: String, onValueChange: (String) -> Unit, onSubmit: () -> Uni
                 onClick = { if (hasText) onSubmit() else onMic() },
                 shape = CircleShape,
                 colors = IconButtonDefaults.filledIconButtonColors(
-                    containerColor = MaterialTheme.colorScheme.primary,
+                    containerColor = Color.Transparent,
+                    contentColor = SlateInk,
                 ),
-                modifier = Modifier.size(56.dp),
+                modifier = Modifier
+                    .size(56.dp)
+                    .clip(CircleShape)
+                    .background(Brush.linearGradient(listOf(Palette[0], Palette[3], Palette[6], Palette[9]))),
             ) {
                 AnimatedContent(
                     targetState = hasText,

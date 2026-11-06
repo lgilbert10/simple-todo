@@ -1,5 +1,5 @@
 <resources>
-    <style name="Theme.Todo" parent="android:Theme.Material.Light.NoActionBar">
-        <item name="android:windowBackground">@android:color/white</item>
+    <style name="Theme.Todo" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">#2E343E</item>
     </style>
 </resources>
