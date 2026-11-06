@@ -40,6 +40,12 @@ class TodoViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    fun edit(todo: Todo, text: String) {
+        val clean = text.trim().replaceFirstChar { it.uppercase() }
+        if (clean.isEmpty() || clean == todo.text) return
+        mutate { list -> list.map { if (it.id == todo.id) it.copy(text = clean) else it } }
+    }
+
     fun remove(todo: Todo): Int {
         val index = _items.value.indexOf(todo)
         mutate { it - todo }

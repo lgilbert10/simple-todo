@@ -7,6 +7,23 @@ import android.os.Bundle
 import android.speech.RecognizerIntent
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.isImeVisible
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -127,6 +144,7 @@ fun TodoScreen(vm: TodoViewModel = viewModel()) {
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
     val context = LocalContext.current
+    val focusManager = LocalFocusManager.current
 
     fun add(text: String) {
         vm.add(text)
@@ -164,7 +182,12 @@ fun TodoScreen(vm: TodoViewModel = viewModel()) {
             )
         },
     ) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding)) {
+        Column(
+            Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .pointerInput(Unit) { detectTapGestures { focusManager.clearFocus() } },
+        ) {
             Row(
                 Modifier.padding(start = 24.dp, end = 20.dp, top = 28.dp, bottom = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -205,6 +228,7 @@ fun TodoScreen(vm: TodoViewModel = viewModel()) {
                         TodoRow(
                             todo = todo,
                             modifier = Modifier.animateItem(),
+                            onEdit = { vm.edit(todo, it) },
                             onDelete = {
                                 val index = vm.remove(todo)
                                 scope.launch {
@@ -256,8 +280,39 @@ fun Counter(value: Int, label: String, accent: Color) {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun TodoRow(todo: Todo, modifier: Modifier = Modifier, onDelete: () -> Unit) {
+fun TodoRow(todo: Todo, modifier: Modifier = Modifier, onEdit: (String) -> Unit, onDelete: () -> Unit) {
+    var editing by remember { mutableStateOf(false) }
+    var draft by remember { mutableStateOf(TextFieldValue(todo.text)) }
+    val focus = remember { FocusRequester() }
+    val focusManager = LocalFocusManager.current
+    var hadFocus by remember { mutableStateOf(false) }
+
+    fun finish() {
+        if (!editing) return
+        editing = false
+        hadFocus = false
+        onEdit(draft.text)
+        focusManager.clearFocus()
+    }
+
+    BackHandler(enabled = editing) { finish() }
+    LaunchedEffect(editing) { if (editing) focus.requestFocus() }
+
+    val imeVisible = WindowInsets.isImeVisible
+    var hadIme by remember { mutableStateOf(false) }
+    LaunchedEffect(imeVisible, editing) {
+        if (!editing) hadIme = false
+        else if (imeVisible) hadIme = true
+        else if (hadIme) finish()
+    }
+    val latestDraft by rememberUpdatedState(draft.text)
+    val latestEditing by rememberUpdatedState(editing)
+    LifecycleResumeEffect(Unit) {
+        onPauseOrDispose { if (latestEditing) onEdit(latestDraft) }
+    }
+
     val state = rememberSwipeToDismissBoxState(
         confirmValueChange = {
             if (it != SwipeToDismissBoxValue.Settled) onDelete()
@@ -269,6 +324,7 @@ fun TodoRow(todo: Todo, modifier: Modifier = Modifier, onDelete: () -> Unit) {
     SwipeToDismissBox(
         state = state,
         modifier = modifier,
+        gesturesEnabled = !editing,
         backgroundContent = {
             val active = state.targetValue != SwipeToDismissBoxValue.Settled
             val iconScale by animateFloatAsState(if (active) 1.15f else 0.85f, label = "icon")
@@ -295,17 +351,40 @@ fun TodoRow(todo: Todo, modifier: Modifier = Modifier, onDelete: () -> Unit) {
         },
     ) {
         Surface(
+            onClick = {
+                draft = TextFieldValue(todo.text, selection = TextRange(todo.text.length))
+                editing = true
+            },
+            enabled = !editing,
             shape = shape,
             color = Palette[todo.color],
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text(
-                todo.text,
-                fontSize = 17.sp,
-                fontWeight = FontWeight.Medium,
-                color = SlateInk,
-                modifier = Modifier.padding(horizontal = 20.dp, vertical = 18.dp),
-            )
+            val textStyle = TextStyle(fontSize = 17.sp, fontWeight = FontWeight.Medium, color = SlateInk)
+            val textModifier = Modifier.padding(horizontal = 20.dp, vertical = 18.dp)
+            if (editing) {
+                BasicTextField(
+                    value = draft,
+                    onValueChange = { draft = it },
+                    textStyle = textStyle,
+                    singleLine = true,
+                    cursorBrush = SolidColor(SlateInk),
+                    keyboardOptions = KeyboardOptions(
+                        capitalization = KeyboardCapitalization.Sentences,
+                        imeAction = ImeAction.Done,
+                    ),
+                    keyboardActions = KeyboardActions(onDone = { finish() }),
+                    modifier = textModifier
+                        .fillMaxWidth()
+                        .focusRequester(focus)
+                        .onFocusChanged {
+                            if (it.isFocused) hadFocus = true
+                            else if (hadFocus) finish()
+                        },
+                )
+            } else {
+                Text(todo.text, style = textStyle, modifier = textModifier)
+            }
         }
     }
 }
