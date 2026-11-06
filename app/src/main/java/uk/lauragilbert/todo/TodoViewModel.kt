@@ -46,6 +46,13 @@ class TodoViewModel(app: Application) : AndroidViewModel(app) {
         mutate { list -> list.map { if (it.id == todo.id) it.copy(text = clean) else it } }
     }
 
+    fun move(from: Int, to: Int) {
+        mutate { list ->
+            if (from !in list.indices || to !in list.indices) list
+            else list.toMutableList().apply { add(to, removeAt(from)) }
+        }
+    }
+
     fun remove(todo: Todo): Int {
         val index = _items.value.indexOf(todo)
         mutate { it - todo }

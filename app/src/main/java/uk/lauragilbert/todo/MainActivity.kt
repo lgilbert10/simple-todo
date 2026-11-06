@@ -20,7 +20,12 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalHapticFeedback
+import sh.calvin.reorderable.ReorderableCollectionItemScope
+import sh.calvin.reorderable.ReorderableItem
+import sh.calvin.reorderable.rememberReorderableLazyListState
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.TextFieldValue
@@ -29,6 +34,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -143,6 +149,11 @@ fun TodoScreen(vm: TodoViewModel = viewModel()) {
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
+    val haptic = LocalHapticFeedback.current
+    val reorderState = rememberReorderableLazyListState(listState) { from, to ->
+        vm.move(from.index, to.index)
+        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+    }
     val context = LocalContext.current
     val focusManager = LocalFocusManager.current
 
@@ -225,9 +236,11 @@ fun TodoScreen(vm: TodoViewModel = viewModel()) {
                     modifier = Modifier.fillMaxSize(),
                 ) {
                     items(items, key = { it.id }) { todo ->
+                      ReorderableItem(reorderState, key = todo.id) { dragging ->
                         TodoRow(
                             todo = todo,
-                            modifier = Modifier.animateItem(),
+                            dragScope = this,
+                            dragging = dragging,
                             onEdit = { vm.edit(todo, it) },
                             onDelete = {
                                 val index = vm.remove(todo)
@@ -240,6 +253,7 @@ fun TodoScreen(vm: TodoViewModel = viewModel()) {
                                 }
                             },
                         )
+                      }
                     }
                 }
             }
@@ -282,7 +296,17 @@ fun Counter(value: Int, label: String, accent: Color) {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun TodoRow(todo: Todo, modifier: Modifier = Modifier, onEdit: (String) -> Unit, onDelete: () -> Unit) {
+fun TodoRow(
+    todo: Todo,
+    dragScope: ReorderableCollectionItemScope,
+    dragging: Boolean,
+    modifier: Modifier = Modifier,
+    onEdit: (String) -> Unit,
+    onDelete: () -> Unit,
+) {
+    val haptic = LocalHapticFeedback.current
+    val lift by animateDpAsState(if (dragging) 10.dp else 0.dp, label = "lift")
+    val grow by animateFloatAsState(if (dragging) 1.03f else 1f, label = "grow")
     var editing by remember { mutableStateOf(false) }
     var draft by remember { mutableStateOf(TextFieldValue(todo.text)) }
     val focus = remember { FocusRequester() }
@@ -358,7 +382,16 @@ fun TodoRow(todo: Todo, modifier: Modifier = Modifier, onEdit: (String) -> Unit,
             enabled = !editing,
             shape = shape,
             color = Palette[todo.color],
-            modifier = Modifier.fillMaxWidth(),
+            shadowElevation = lift,
+            modifier = with(dragScope) {
+                Modifier
+                    .fillMaxWidth()
+                    .scale(grow)
+                    .longPressDraggableHandle(
+                        enabled = !editing,
+                        onDragStarted = { haptic.performHapticFeedback(HapticFeedbackType.LongPress) },
+                    )
+            },
         ) {
             val textStyle = TextStyle(fontSize = 17.sp, fontWeight = FontWeight.Medium, color = SlateInk)
             val textModifier = Modifier.padding(horizontal = 20.dp, vertical = 18.dp)
