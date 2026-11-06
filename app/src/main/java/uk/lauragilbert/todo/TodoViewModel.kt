@@ -14,7 +14,7 @@ import org.json.JSONObject
 import java.io.File
 import java.time.LocalDate
 
-data class Todo(val id: Long, val text: String, val color: Int)
+data class Todo(val id: Long, val text: String, val color: Int, val later: Boolean = false)
 
 data class Stats(val total: Int = 0, val day: String = "", val today: Int = 0) {
     fun forToday(date: String) = if (day == date) this else copy(day = date, today = 0)
@@ -31,12 +31,12 @@ class TodoViewModel(app: Application) : AndroidViewModel(app) {
 
     fun refreshDay() = _stats.update { it.forToday(today()) }
 
-    fun add(text: String) {
+    fun add(text: String, later: Boolean) {
         val clean = text.trim().replaceFirstChar { it.uppercase() }
         if (clean.isEmpty()) return
         mutate { list ->
             val id = (list.maxOfOrNull { it.id } ?: 0L) + 1
-            list + Todo(id, clean, pickColor(list))
+            list + Todo(id, clean, pickColor(list), later)
         }
     }
 
@@ -46,10 +46,19 @@ class TodoViewModel(app: Application) : AndroidViewModel(app) {
         mutate { list -> list.map { if (it.id == todo.id) it.copy(text = clean) else it } }
     }
 
-    fun move(from: Int, to: Int) {
+    fun move(fromId: Long, toId: Long) {
         mutate { list ->
-            if (from !in list.indices || to !in list.indices) list
+            val from = list.indexOfFirst { it.id == fromId }
+            val to = list.indexOfFirst { it.id == toId }
+            if (from < 0 || to < 0) list
             else list.toMutableList().apply { add(to, removeAt(from)) }
+        }
+    }
+
+    fun switchTab(todo: Todo) {
+        mutate { list ->
+            val current = list.find { it.id == todo.id } ?: return@mutate list
+            listOf(current.copy(later = !current.later)) + (list - current)
         }
     }
 
@@ -111,14 +120,14 @@ class TodoViewModel(app: Application) : AndroidViewModel(app) {
         (0 until arr.length()).fold(emptyList<Todo>()) { list, i ->
             val o = arr.getJSONObject(i)
             val color = o.optInt("color", -1).takeIf { it in Palette.indices } ?: pickColor(list)
-            list + Todo(o.getLong("id"), o.getString("text"), color)
+            list + Todo(o.getLong("id"), o.getString("text"), color, o.optBoolean("later"))
         }
     }.getOrDefault(emptyList())
 
     @Synchronized
     private fun save(list: List<Todo>) {
         val arr = JSONArray()
-        list.forEach { arr.put(JSONObject().put("id", it.id).put("text", it.text).put("color", it.color)) }
+        list.forEach { arr.put(JSONObject().put("id", it.id).put("text", it.text).put("color", it.color).put("later", it.later)) }
         val tmp = File(file.parentFile, "todos.json.tmp")
         tmp.writeText(arr.toString())
         tmp.renameTo(file)

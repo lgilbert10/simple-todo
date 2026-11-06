@@ -1,5 +1,14 @@
 package uk.lauragilbert.todo
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.platform.LocalDensity
+import kotlin.math.abs
 import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.Intent
@@ -148,18 +157,20 @@ fun TodoScreen(vm: TodoViewModel = viewModel()) {
     var input by rememberSaveable { mutableStateOf("") }
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
+    var later by rememberSaveable { mutableStateOf(false) }
+    val shown = items.filter { it.later == later }
     val listState = rememberLazyListState()
     val haptic = LocalHapticFeedback.current
     val reorderState = rememberReorderableLazyListState(listState) { from, to ->
-        vm.move(from.index, to.index)
+        vm.move(from.key as Long, to.key as Long)
         haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
     }
     val context = LocalContext.current
     val focusManager = LocalFocusManager.current
 
     fun add(text: String) {
-        vm.add(text)
-        scope.launch { listState.animateScrollToItem(maxOf(0, vm.items.value.size - 1)) }
+        vm.add(text, later)
+        scope.launch { listState.animateScrollToItem(maxOf(0, vm.items.value.count { it.later == later } - 1)) }
     }
 
     val speech = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -211,7 +222,7 @@ fun TodoScreen(vm: TodoViewModel = viewModel()) {
                         color = MaterialTheme.colorScheme.onSurface,
                     )
                     Text(
-                        if (items.isEmpty()) "Nothing left" else "${items.size} ${if (items.size == 1) "item" else "items"}",
+                        if (shown.isEmpty()) "Nothing left" else "${shown.size} ${if (shown.size == 1) "item" else "items"}",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -220,10 +231,23 @@ fun TodoScreen(vm: TodoViewModel = viewModel()) {
                 Spacer(Modifier.width(12.dp))
                 Counter(stats.total, "All time", Palette[9])
             }
-            if (items.isEmpty()) {
+            Row(
+                Modifier.padding(start = 16.dp, bottom = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                listOf(false to "Today", true to "Later").forEach { (isLater, label) ->
+                    TabPill(label, items.count { it.later == isLater }, later == isLater) {
+                        if (later != isLater) {
+                            later = isLater
+                            scope.launch { listState.scrollToItem(0) }
+                        }
+                    }
+                }
+            }
+            if (shown.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text(
-                        "Type or tap the mic to add something",
+                        if (later) "Nothing saved for later" else "Type or tap the mic to add something",
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                     )
@@ -235,12 +259,23 @@ fun TodoScreen(vm: TodoViewModel = viewModel()) {
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier.fillMaxSize(),
                 ) {
-                    items(items, key = { it.id }) { todo ->
+                    items(shown, key = { it.id }) { todo ->
                       ReorderableItem(reorderState, key = todo.id) { dragging ->
                         TodoRow(
                             todo = todo,
                             dragScope = this,
                             dragging = dragging,
+                            destination = if (later) "Today" else "Later",
+                            onSwitchTab = {
+                                vm.switchTab(todo)
+                                scope.launch {
+                                    snackbar.currentSnackbarData?.dismiss()
+                                    snackbar.showSnackbar(
+                                        if (later) "Moved to Today" else "Moved to Later",
+                                        duration = SnackbarDuration.Short,
+                                    )
+                                }
+                            },
                             onEdit = { vm.edit(todo, it) },
                             onDelete = {
                                 val index = vm.remove(todo)
@@ -294,12 +329,42 @@ fun Counter(value: Int, label: String, accent: Color) {
     }
 }
 
+@Composable
+fun TabPill(label: String, count: Int, selected: Boolean, onClick: () -> Unit) {
+    val bg by animateColorAsState(if (selected) SlateLight else Color.Transparent, label = "tab")
+    Row(
+        Modifier
+            .clip(CircleShape)
+            .background(bg)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            label,
+            fontSize = 15.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = if (selected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        if (count > 0) {
+            Spacer(Modifier.width(6.dp))
+            Text(
+                count.toString(),
+                fontSize = 13.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun TodoRow(
     todo: Todo,
     dragScope: ReorderableCollectionItemScope,
     dragging: Boolean,
+    destination: String,
+    onSwitchTab: () -> Unit,
     modifier: Modifier = Modifier,
     onEdit: (String) -> Unit,
     onDelete: () -> Unit,
@@ -308,6 +373,12 @@ fun TodoRow(
     val lift by animateDpAsState(if (dragging) 10.dp else 0.dp, label = "lift")
     val grow by animateFloatAsState(if (dragging) 1.03f else 1f, label = "grow")
     var editing by remember { mutableStateOf(false) }
+    val isDragging by rememberUpdatedState(dragging)
+    var dx by remember { mutableFloatStateOf(0f) }
+    val switchAt = with(LocalDensity.current) { 96.dp.toPx() }
+    val armed = abs(dx) > switchAt
+    LaunchedEffect(armed) { if (armed) haptic.performHapticFeedback(HapticFeedbackType.LongPress) }
+    val slide by animateFloatAsState(if (dragging) dx.coerceIn(-switchAt * 1.4f, switchAt * 1.4f) else 0f, label = "slide")
     var draft by remember { mutableStateOf(TextFieldValue(todo.text)) }
     val focus = remember { FocusRequester() }
     val focusManager = LocalFocusManager.current
@@ -347,8 +418,18 @@ fun TodoRow(
     val shape = RoundedCornerShape(18.dp)
     SwipeToDismissBox(
         state = state,
-        modifier = modifier,
-        gesturesEnabled = !editing,
+        modifier = modifier.pointerInput(Unit) {
+            awaitEachGesture {
+                awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                dx = 0f
+                do {
+                    val event = awaitPointerEvent(PointerEventPass.Initial)
+                    val change = event.changes.first()
+                    if (isDragging) dx += change.position.x - change.previousPosition.x
+                } while (event.changes.any { it.pressed })
+            }
+        },
+        gesturesEnabled = !editing && !dragging,
         backgroundContent = {
             val active = state.targetValue != SwipeToDismissBoxValue.Settled
             val iconScale by animateFloatAsState(if (active) 1.15f else 0.85f, label = "icon")
@@ -365,7 +446,7 @@ fun TodoRow(
                     .padding(horizontal = 24.dp),
                 contentAlignment = alignment,
             ) {
-                Icon(
+                if (state.dismissDirection != SwipeToDismissBoxValue.Settled) Icon(
                     Icons.Rounded.Delete,
                     contentDescription = "Delete",
                     tint = Palette[todo.color],
@@ -386,10 +467,18 @@ fun TodoRow(
             modifier = with(dragScope) {
                 Modifier
                     .fillMaxWidth()
+                    .graphicsLayer {
+                        translationX = slide
+                        alpha = if (armed && dragging) 0.8f else 1f
+                    }
                     .scale(grow)
                     .longPressDraggableHandle(
                         enabled = !editing,
                         onDragStarted = { haptic.performHapticFeedback(HapticFeedbackType.LongPress) },
+                        onDragStopped = {
+                            if (abs(dx) > switchAt) onSwitchTab()
+                            dx = 0f
+                        },
                     )
             },
         ) {
@@ -416,7 +505,13 @@ fun TodoRow(
                         },
                 )
             } else {
-                Text(todo.text, style = textStyle, modifier = textModifier)
+                val hint = textStyle.copy(fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                val showHint = armed && dragging
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (showHint && dx > 0) Text("$destination →", style = hint, modifier = Modifier.padding(start = 20.dp))
+                    Text(todo.text, style = textStyle, modifier = textModifier.weight(1f))
+                    if (showHint && dx < 0) Text("← $destination", style = hint, modifier = Modifier.padding(end = 20.dp))
+                }
             }
         }
     }
