@@ -14,7 +14,16 @@ import org.json.JSONObject
 import java.io.File
 import java.time.LocalDate
 
-data class Todo(val id: Long, val text: String, val color: Int, val later: Boolean = false)
+data class Todo(
+    val id: Long,
+    val text: String,
+    val color: Int,
+    val later: Boolean = false,
+    val repeat: Boolean = false,
+    val hiddenUntil: String = "",
+) {
+    fun visibleOn(date: String) = hiddenUntil <= date
+}
 
 data class Stats(val total: Int = 0, val day: String = "", val today: Int = 0) {
     fun forToday(date: String) = if (day == date) this else copy(day = date, today = 0)
@@ -46,6 +55,15 @@ class TodoViewModel(app: Application) : AndroidViewModel(app) {
         mutate { list -> list.map { if (it.id == todo.id) it.copy(text = clean) else it } }
     }
 
+    fun toggleRepeat(todo: Todo) {
+        mutate { list ->
+            val current = list.find { it.id == todo.id } ?: return@mutate list
+            val updated = current.copy(repeat = !current.repeat)
+            if (updated.repeat) list.filter { it.id != todo.id } + updated
+            else list.map { if (it.id == todo.id) updated else it }
+        }
+    }
+
     fun move(fromId: Long, toId: Long) {
         mutate { list ->
             val from = list.indexOfFirst { it.id == fromId }
@@ -62,18 +80,24 @@ class TodoViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun remove(todo: Todo): Int {
-        val index = _items.value.indexOf(todo)
-        mutate { it - todo }
+    fun remove(id: Long): Pair<Todo, Int>? {
+        val index = _items.value.indexOfFirst { it.id == id }
+        val todo = _items.value.getOrNull(index) ?: return null
+        val tomorrow = LocalDate.now().plusDays(1).toString()
+        mutate { list ->
+            if (todo.repeat) list.filter { it.id != id } + todo.copy(later = false, hiddenUntil = tomorrow)
+            else list.filter { it.id != id }
+        }
         changeStats(+1)
-        return index
+        return todo to index
     }
 
     fun restore(todo: Todo, index: Int) {
-        if (_items.value.none { it.id == todo.id }) changeStats(-1)
+        val current = _items.value.find { it.id == todo.id }
+        if (current != null && current.visibleOn(today())) return
+        changeStats(-1)
         mutate { list ->
-            if (list.any { it.id == todo.id }) list
-            else list.toMutableList().apply { add(index.coerceIn(0, size), todo) }
+            list.filter { it.id != todo.id }.toMutableList().apply { add(index.coerceIn(0, size), todo) }
         }
     }
 
@@ -120,14 +144,18 @@ class TodoViewModel(app: Application) : AndroidViewModel(app) {
         (0 until arr.length()).fold(emptyList<Todo>()) { list, i ->
             val o = arr.getJSONObject(i)
             val color = o.optInt("color", -1).takeIf { it in Palette.indices } ?: pickColor(list)
-            list + Todo(o.getLong("id"), o.getString("text"), color, o.optBoolean("later"))
+            list + Todo(
+                o.getLong("id"), o.getString("text"), color,
+                o.optBoolean("later"), o.optBoolean("repeat"), o.optString("hiddenUntil"),
+            )
         }
     }.getOrDefault(emptyList())
 
     @Synchronized
     private fun save(list: List<Todo>) {
         val arr = JSONArray()
-        list.forEach { arr.put(JSONObject().put("id", it.id).put("text", it.text).put("color", it.color).put("later", it.later)) }
+        list.forEach { arr.put(JSONObject().put("id", it.id).put("text", it.text).put("color", it.color).put("later", it.later)
+                .put("repeat", it.repeat).put("hiddenUntil", it.hiddenUntil)) }
         val tmp = File(file.parentFile, "todos.json.tmp")
         tmp.writeText(arr.toString())
         tmp.renameTo(file)

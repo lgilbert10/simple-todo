@@ -82,6 +82,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Mic
+import androidx.compose.material.icons.rounded.Repeat
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButtonDefaults
@@ -162,7 +164,7 @@ fun TodoScreen(vm: TodoViewModel = viewModel()) {
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     var later by rememberSaveable { mutableStateOf(false) }
-    val shown = items.filter { it.later == later }
+    val shown = items.filter { it.later == later && it.visibleOn(stats.day) }
     val listState = rememberLazyListState()
     val haptic = LocalHapticFeedback.current
     val reorderState = rememberReorderableLazyListState(listState) { from, to ->
@@ -186,7 +188,7 @@ fun TodoScreen(vm: TodoViewModel = viewModel()) {
 
     fun add(text: String) {
         vm.add(text, later)
-        scope.launch { listState.animateScrollToItem(maxOf(0, vm.items.value.count { it.later == later } - 1)) }
+        scope.launch { listState.animateScrollToItem(maxOf(0, vm.items.value.count { it.later == later && it.visibleOn(stats.day) } - 1)) }
     }
 
     val speech = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -254,7 +256,7 @@ fun TodoScreen(vm: TodoViewModel = viewModel()) {
                 listOf(false to "Today", true to "Later").forEach { (isLater, label) ->
                     TabPill(
                         label = label,
-                        count = items.count { it.later == isLater },
+                        count = items.count { it.later == isLater && it.visibleOn(stats.day) },
                         selected = later == isLater,
                         dropColor = dragColor?.takeIf { isLater != later },
                         hovered = dropTarget == isLater,
@@ -306,14 +308,15 @@ fun TodoScreen(vm: TodoViewModel = viewModel()) {
                                 }
                             },
                             onEdit = { vm.edit(todo, it) },
+                            onToggleRepeat = { vm.toggleRepeat(todo) },
                             onDelete = {
-                                val index = vm.remove(todo)
+                                val (done, index) = vm.remove(todo.id) ?: return@TodoRow
                                 scope.launch {
                                     snackbar.currentSnackbarData?.dismiss()
                                     val r = snackbar.showSnackbar(
-                                        "Done", actionLabel = "Undo", duration = SnackbarDuration.Short,
+                                        if (done.repeat) "Done, back tomorrow" else "Done", actionLabel = "Undo", duration = SnackbarDuration.Short,
                                     )
-                                    if (r == SnackbarResult.ActionPerformed) vm.restore(todo, index)
+                                    if (r == SnackbarResult.ActionPerformed) vm.restore(done, index)
                                 }
                             },
                         )
@@ -420,6 +423,7 @@ fun TodoRow(
     onDragEnd: () -> Unit,
     modifier: Modifier = Modifier,
     onEdit: (String) -> Unit,
+    onToggleRepeat: () -> Unit,
     onDelete: () -> Unit,
 ) {
     val haptic = LocalHapticFeedback.current
@@ -458,9 +462,10 @@ fun TodoRow(
         onPauseOrDispose { if (latestEditing) onEdit(latestDraft) }
     }
 
+    val latestDelete by rememberUpdatedState(onDelete)
     val state = rememberSwipeToDismissBoxState(
         confirmValueChange = {
-            if (it != SwipeToDismissBoxValue.Settled) onDelete()
+            if (it != SwipeToDismissBoxValue.Settled) latestDelete()
             true
         },
         positionalThreshold = { it * 0.35f },
@@ -532,28 +537,47 @@ fun TodoRow(
         ) {
             val textStyle = TextStyle(fontSize = 17.sp, fontWeight = FontWeight.Medium, color = SlateInk)
             val textModifier = Modifier.padding(horizontal = 20.dp, vertical = 18.dp)
-            if (editing) {
-                BasicTextField(
-                    value = draft,
-                    onValueChange = { draft = it },
-                    textStyle = textStyle,
-                    singleLine = true,
-                    cursorBrush = SolidColor(SlateInk),
-                    keyboardOptions = KeyboardOptions(
-                        capitalization = KeyboardCapitalization.Sentences,
-                        imeAction = ImeAction.Done,
-                    ),
-                    keyboardActions = KeyboardActions(onDone = { finish() }),
-                    modifier = textModifier
-                        .fillMaxWidth()
-                        .focusRequester(focus)
-                        .onFocusChanged {
-                            if (it.isFocused) hadFocus = true
-                            else if (hadFocus) finish()
-                        },
-                )
-            } else {
-                Text(todo.text, style = textStyle, modifier = textModifier)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (editing) {
+                    BasicTextField(
+                        value = draft,
+                        onValueChange = { draft = it },
+                        textStyle = textStyle,
+                        singleLine = true,
+                        cursorBrush = SolidColor(SlateInk),
+                        keyboardOptions = KeyboardOptions(
+                            capitalization = KeyboardCapitalization.Sentences,
+                            imeAction = ImeAction.Done,
+                        ),
+                        keyboardActions = KeyboardActions(onDone = { finish() }),
+                        modifier = textModifier
+                            .weight(1f)
+                            .focusRequester(focus)
+                            .onFocusChanged {
+                                if (it.isFocused) hadFocus = true
+                                else if (hadFocus) finish()
+                            },
+                    )
+                    IconButton(onClick = onToggleRepeat, modifier = Modifier.padding(end = 6.dp)) {
+                        Icon(
+                            Icons.Rounded.Repeat,
+                            contentDescription = if (todo.repeat) "Repeats daily, tap to stop" else "Repeat daily",
+                            tint = if (todo.repeat) SlateInk else SlateInk.copy(alpha = 0.35f),
+                            modifier = Modifier
+                                .clip(CircleShape)
+                                .background(if (todo.repeat) Color.White.copy(alpha = 0.45f) else Color.Transparent)
+                                .padding(6.dp),
+                        )
+                    }
+                } else {
+                    Text(todo.text, style = textStyle, modifier = textModifier.weight(1f))
+                    if (todo.repeat) Icon(
+                        Icons.Rounded.Repeat,
+                        contentDescription = "Repeats daily",
+                        tint = SlateInk.copy(alpha = 0.55f),
+                        modifier = Modifier.padding(end = 18.dp).size(18.dp),
+                    )
+                }
             }
         }
     }
